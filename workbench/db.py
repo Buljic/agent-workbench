@@ -25,7 +25,8 @@ CREATE TABLE IF NOT EXISTS runs (
     started_at TEXT NOT NULL,
     finished_at TEXT,
     result TEXT,
-    error TEXT
+    error TEXT,
+    history TEXT
 );
 
 CREATE TABLE IF NOT EXISTS tool_calls (
@@ -63,7 +64,17 @@ CREATE TABLE IF NOT EXISTS audit (
 """
 
 # columns that update_run may change. id and task_id are fixed at insert time.
-RUN_UPDATABLE = {"status", "provider", "steps", "tokens", "started_at", "finished_at", "result", "error"}
+RUN_UPDATABLE = {
+    "status",
+    "provider",
+    "steps",
+    "tokens",
+    "started_at",
+    "finished_at",
+    "result",
+    "error",
+    "history",
+}
 
 
 def connect(db_path: str = ":memory:") -> sqlite3.Connection:
@@ -133,6 +144,8 @@ def update_run(conn: sqlite3.Connection, run_id: str, **fields: Any) -> None:
             value = value.value
         elif isinstance(value, datetime):
             value = value.isoformat()
+        elif isinstance(value, (list, dict)):
+            value = json.dumps(value)
         values.append(value)
 
     # column names come from RUN_UPDATABLE, so the f-string cannot take user input.

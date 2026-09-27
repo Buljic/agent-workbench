@@ -40,3 +40,12 @@ class RunOut(BaseModel):
     error: str | None
     started_at: datetime
     finished_at: datetime | None
+
+
+class ApprovalDecision(BaseModel):
+    approved: bool
+    decided_by: str = Field(min_length=1, max_length=80)
+    # the stub provider needs a continuation script; a real provider needs its endpoint
+    script: list[str] = []
+    model: str | None = None
+    base_url: str | None = None

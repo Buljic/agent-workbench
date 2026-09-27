@@ -138,3 +138,37 @@ def test_tool_arguments_are_redacted_in_the_audit(client, repo):
     blob = json.dumps(client.get(f"/runs/{run['id']}/audit").json()["records"])
     assert "sk-abcdefghijklmnop1234" not in blob
     assert task["id"] in blob
+
+
+def test_open_issue_waits_for_approval(client, repo, task_id):
+    script = [step(tool="open_issue", arguments={"title": "flaky test", "body": "retry in ci"})]
+    run = post_run(client, task_id, script).json()
+    assert run["status"] == "WAITING_APPROVAL"
+    pending = client.get(f"/runs/{run['id']}/approvals").json()["pending"]
+    assert pending is not None
+    assert pending["tool"] == "open_issue"
+
+
+def test_approved_tool_runs_and_the_loop_continues(client, repo, task_id):
+    script = [step(tool="open_issue", arguments={"title": "t", "body": "b"})]
+    run = post_run(client, task_id, script).json()
+    pending = client.get(f"/runs/{run['id']}/approvals").json()["pending"]
+    body = {"approved": True, "decided_by": "imad", "script": [step(final="issue created")]}
+    decided = client.post(f"/runs/{run['id']}/approvals/{pending['id']}", json=body)
+    assert decided.status_code == 200
+    payload = decided.json()
+    assert payload["status"] == "COMPLETED"
+    assert payload["result"] == "issue created"
+    audit = [record["event"] for record in client.get(f"/runs/{run['id']}/audit").json()["records"]]
+    assert "approval_decided" in audit
+
+
+def test_rejected_approval_fails_the_run(client, repo, task_id):
+    script = [step(tool="open_issue", arguments={"title": "t", "body": "b"})]
+    run = post_run(client, task_id, script).json()
+    pending = client.get(f"/runs/{run['id']}/approvals").json()["pending"]
+    body = {"approved": False, "decided_by": "imad"}
+    decided = client.post(f"/runs/{run['id']}/approvals/{pending['id']}", json=body).json()
+    assert decided["status"] == "FAILED"
+    assert "rejected by imad" in decided["error"]
+    assert client.get(f"/runs/{run['id']}/approvals").json()["pending"] is None

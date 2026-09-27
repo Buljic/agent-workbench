@@ -67,3 +67,5 @@ class Run(BaseModel):
     finished_at: datetime | None = None
     result: str | None = None
     error: str | None = None
+    # json text of the message history, kept so an approval can resume the loop
+    history: str | None = None

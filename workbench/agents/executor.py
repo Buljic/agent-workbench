@@ -49,8 +49,8 @@ class Executor:
         self.budget = budget
         self.max_tokens_per_step = max_tokens_per_step
 
-    def run(self, task: Task, run_id: str) -> RunOutcome:
-        outcome = self._run_loop(task, run_id)
+    def run(self, task: Task, run_id: str, history: list[dict] | None = None) -> RunOutcome:
+        outcome = self._run_loop(task, run_id, history or [])
         self._finalize(run_id, outcome)
         return outcome
 
@@ -69,9 +69,9 @@ class Executor:
         db.update_run(self.conn, run_id, **fields)
         self.audit.record(run_id, "run_finished", {"status": outcome.status.value})
 
-    def _run_loop(self, task: Task, run_id: str) -> RunOutcome:
+    def _run_loop(self, task: Task, run_id: str, history: list[dict]) -> RunOutcome:
         self.audit.record(run_id, "run_started", {"task_id": task.id})
-        history: list[dict] = []
+        self._save_history(run_id, history)
         steps = 0
         tokens = 0
 
@@ -156,9 +156,14 @@ class Executor:
 
             history.append({"role": "assistant", "content": raw})
             history.append({"role": "user", "content": f"{tool} -> {output}"})
+            self._save_history(run_id, history)
 
         self.audit.record(run_id, "budget_exceeded", {"kind": "steps"})
         return RunOutcome(RunStatus.BLOCKED, None, steps, tokens, error="step budget exhausted")
+
+    def _save_history(self, run_id: str, history: list[dict]) -> None:
+        # the approval flow resumes from this snapshot, so it must be current
+        db.update_run(self.conn, run_id, history=history)
 
     def _finish_tool_call(self, run_id: str, step: int, output: str, citations: list[str]) -> None:
         # db has no helper to update a tool call, so the row is set here; (run_id, step) is unique
