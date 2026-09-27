@@ -6,13 +6,17 @@ from workbench import db
 from workbench.models import AuditRecord
 
 
-def _redact_value(value: Any, redact: Callable[[str], str]) -> Any:
+SAFE_KEYS = {"task_id", "run_id", "approval_id"}
+
+
+def _redact_value(value: Any, redact: Callable[[str], str], key: str | None = None) -> Any:
     if isinstance(value, str):
-        return redact(value)
+        # identifiers are not secrets; 32-character hex ids would trip the hex rule
+        return value if key in SAFE_KEYS else redact(value)
     if isinstance(value, dict):
-        return {key: _redact_value(item, redact) for key, item in value.items()}
+        return {name: _redact_value(item, redact, name) for name, item in value.items()}
     if isinstance(value, list):
-        return [_redact_value(item, redact) for item in value]
+        return [_redact_value(item, redact, key) for item in value]
     return value
 
 
