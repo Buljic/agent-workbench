@@ -1,0 +1,15 @@
+# job runner settings. secrets are never stored here.
+
+[queue]
+url = "http://localhost:8080/queue"
+batch_size = 25
+poll_interval_s = 5
+# the value is a reference; the runner reads JOBRUNNER_API_KEY from the environment
+api_key = "env:JOBRUNNER_API_KEY"
+
+[retry]
+max_attempts = 3
+base_delay_ms = 250
+
+[storage]
+path = "results.db"
