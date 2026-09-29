@@ -15,7 +15,7 @@ from workbench.guardrails import CommandPolicy, PathPolicy
 from workbench.guardrails.budgets import Budget
 from workbench.guardrails.facade import Guardrails
 from workbench.models import Approval, Run, RunStatus, Task, ToolCall
-from workbench.tools import OpenIssueTool, ReadFileTool, RunTestsTool, SearchCodeTool, ToolRegistry
+from workbench.tools import OpenIssueTool, ReadFileTool, RunTestsTool, SearchChunksTool, SearchCodeTool, ToolRegistry
 
 from app.schemas import ApprovalDecision, RunIn, RunOut, TaskIn
 
@@ -102,6 +102,7 @@ def create_app(
             for tool in (
                 ReadFileTool(task.repo_path),
                 SearchCodeTool(task.repo_path),
+                SearchChunksTool(task.repo_path),
                 RunTestsTool(task.repo_path),
                 OpenIssueTool(),
             ):

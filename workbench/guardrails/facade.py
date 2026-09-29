@@ -6,7 +6,7 @@ from workbench.guardrails.budgets import Budget, BudgetExceeded
 from workbench.guardrails.commands import CommandPolicy
 from workbench.guardrails.paths import PathPolicy
 
-KNOWN_TOOLS = {"read_file", "search_code", "run_tests", "open_issue"}
+KNOWN_TOOLS = {"read_file", "search_code", "search_chunks", "run_tests", "open_issue"}
 
 
 @dataclass

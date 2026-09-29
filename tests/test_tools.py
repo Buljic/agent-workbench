@@ -5,6 +5,7 @@ import pytest
 
 from workbench.guardrails.paths import PathDenied
 from workbench.tools import (
+    SearchChunksTool,
     OpenIssueTool,
     ReadFileTool,
     RunTestsTool,
@@ -205,3 +206,31 @@ def test_open_issue_dry_run(monkeypatch):
 def test_open_issue_empty_title_raises():
     with pytest.raises(ValueError):
         OpenIssueTool().run({"title": "  ", "body": "x"})
+
+
+def test_search_chunks_returns_citations_from_the_index(tmp_path):
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app" / "server.py").write_text(
+        "import threading\n\nRESULTS = {}\n\n\ndef worker(items):\n    for item in items:\n"
+        "        RESULTS[item] = True\n"
+    )
+    tool = SearchChunksTool(tmp_path)
+    result = tool.run({"query": "RESULTS worker", "k": 2})
+    assert result.citations
+    assert result.citations[0].startswith("app/server.py:")
+    assert "RESULTS" in result.output
+
+
+def test_search_chunks_reuses_the_index_between_calls(tmp_path):
+    (tmp_path / "notes.md").write_text("the retry policy allows three attempts\n")
+    tool = SearchChunksTool(tmp_path)
+    first = tool.run({"query": "retry policy"})
+    second = tool.run({"query": "retry policy"})
+    assert first.output == second.output
+    assert first.citations == second.citations
+
+
+def test_search_chunks_rejects_empty_query(tmp_path):
+    tool = SearchChunksTool(tmp_path)
+    with pytest.raises(ValueError):
+        tool.run({"query": "  "})
