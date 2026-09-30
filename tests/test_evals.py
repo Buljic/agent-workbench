@@ -67,3 +67,32 @@ def test_render_table_has_header_and_one_line_per_task():
     for task, line in zip(GOLDEN_TASKS, lines[2:]):
         assert line.startswith(f"| {task.name} |")
         assert line.endswith("| 0.50 |")
+
+
+def test_scorer_fails_an_answer_without_the_keywords(tmp_path):
+    from evals.tasks import GoldenTask
+
+    weak = GoldenTask(
+        name="weak-answer",
+        task_type="docs",
+        description="say nothing useful",
+        expected=["a_keyword_the_model_never_says"],
+        stub_script=['{"final": "I could not find that."}'],
+    )
+    rows = run_suite("stub", workdir=tmp_path, tasks=[weak])
+    assert rows[0]["status"] == "COMPLETED"
+    assert rows[0]["passed"] is False
+
+
+def test_scorer_passes_an_answer_with_every_keyword(tmp_path):
+    from evals.tasks import GoldenTask
+
+    good = GoldenTask(
+        name="good-answer",
+        task_type="docs",
+        description="say the words",
+        expected=["retry", "attempts"],
+        stub_script=['{"final": "the retry policy allows three attempts"}'],
+    )
+    rows = run_suite("stub", workdir=tmp_path, tasks=[good])
+    assert rows[0]["passed"] is True

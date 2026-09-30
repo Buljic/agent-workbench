@@ -100,7 +100,8 @@ def test_happy_path_reads_file_then_finishes(conn, repo, task):
     assert events(conn) == ["run_started", "tool_call", "run_finished"]
     # the second provider call sees the tool output as a user observation
     observation = provider.calls[1]["messages"][-1]
-    assert observation == {"role": "user", "content": "read_file -> import socket\nx = 1\n"}
+    assert observation["content"].startswith("tool result for read_file:\nimport socket\nx = 1\n")
+    assert "citations: src/app.py:1-2" in observation["content"]
 
 
 def test_blocked_read_is_fed_back_and_run_completes(conn, repo, task):

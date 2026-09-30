@@ -26,7 +26,9 @@ CREATE TABLE IF NOT EXISTS runs (
     finished_at TEXT,
     result TEXT,
     error TEXT,
-    history TEXT
+    history TEXT,
+    max_steps INTEGER,
+    max_tokens INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS tool_calls (
@@ -74,6 +76,8 @@ RUN_UPDATABLE = {
     "result",
     "error",
     "history",
+    "max_steps",
+    "max_tokens",
 }
 
 
@@ -113,8 +117,9 @@ def get_task(conn: sqlite3.Connection, task_id: str) -> Task | None:
 
 def insert_run(conn: sqlite3.Connection, run: Run) -> None:
     conn.execute(
-        "INSERT INTO runs (id, task_id, status, provider, steps, tokens, started_at, finished_at, result, error) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO runs (id, task_id, status, provider, steps, tokens, started_at, finished_at, "
+        "result, error, history, max_steps, max_tokens) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             run.id,
             run.task_id,
@@ -126,6 +131,9 @@ def insert_run(conn: sqlite3.Connection, run: Run) -> None:
             _iso(run.finished_at),
             run.result,
             run.error,
+            run.history,
+            run.max_steps,
+            run.max_tokens,
         ),
     )
     conn.commit()
@@ -169,6 +177,9 @@ def get_run(conn: sqlite3.Connection, run_id: str) -> Run | None:
         finished_at=_parse(row["finished_at"]),
         result=row["result"],
         error=row["error"],
+        history=row["history"],
+        max_steps=row["max_steps"],
+        max_tokens=row["max_tokens"],
     )
 
 

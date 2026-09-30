@@ -15,7 +15,8 @@ class SearchCodeTool:
     description = "Case-insensitive text search across the repository."
 
     def __init__(self, root: str | Path = ".") -> None:
-        self.policy = PathPolicy(root, ["**"], deny_globs=[])
+        # default deny globs stay on: search must not read env files or keys
+        self.policy = PathPolicy(root, ["**"])
 
     def run(self, arguments: dict) -> ToolResult:
         query = arguments.get("query")
@@ -49,14 +50,24 @@ class SearchCodeTool:
             truncated=truncated,
         )
 
+    def _allowed(self, path: Path) -> bool:
+        try:
+            relative = path.resolve().relative_to(self.policy.root).as_posix()
+        except ValueError:
+            return False
+        return self.policy.check(relative).allowed
+
     def _files(self, start: Path) -> Iterator[Path]:
         if start.is_file():
-            yield start
+            if self._allowed(start):
+                yield start
             return
         for dirpath, dirnames, filenames in os.walk(start):
             dirnames[:] = sorted(d for d in dirnames if d not in SKIP_PARTS)
             for filename in sorted(filenames):
-                yield Path(dirpath) / filename
+                candidate = Path(dirpath) / filename
+                if self._allowed(candidate):
+                    yield candidate
 
     def _matches(self, start: Path, needle: str) -> Iterator[tuple[str, int, str]]:
         for path in self._files(start):

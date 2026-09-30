@@ -10,12 +10,17 @@ from pathlib import Path
 
 SKIP_NAMES = {".venv", "__pycache__", ".git", ".pytest_cache"}
 SKIP_PATHS = {Path("evals/out")}
-TEST_COMMAND = [sys.executable, "-m", "pytest", "tests/test_guardrails.py", "-q"]
-
-# (label, file to patch, the def line to patch under)
+# (label, file to patch, the def line to patch under, the mutation to insert, test file to run)
 MUTATIONS = [
-    ("path guard", "workbench/guardrails/paths.py", "    def check(self, relative_path: str) -> Decision:"),
-    ("command guard", "workbench/guardrails/commands.py", "    def check(self, argv: list[str]) -> Decision:"),
+    ("path guard", "workbench/guardrails/paths.py",
+     "    def check(self, relative_path: str) -> Decision:",
+     "        return Decision(True)\n", "tests/test_guardrails.py"),
+    ("command guard", "workbench/guardrails/commands.py",
+     "    def check(self, argv: list[str]) -> Decision:",
+     "        return Decision(True)\n", "tests/test_guardrails.py"),
+    ("secret redaction", "workbench/guardrails/secrets.py",
+     "def redact(text: str) -> str:",
+     "    return text\n", "tests/test_guardrails.py"),
 ]
 
 
@@ -25,11 +30,11 @@ def main(argv: list[str] | None = None) -> int:
     all_caught = True
     with tempfile.TemporaryDirectory() as tmp:
         # one copy per mutation, so a removed guard cannot hide the other result
-        for index, (label, relative, signature) in enumerate(MUTATIONS):
+        for index, (label, relative, signature, injection, test_file) in enumerate(MUTATIONS):
             copy = Path(tmp) / f"mutant-{index}"
             shutil.copytree(source, copy, ignore=_ignore(source))
-            _remove_guard(copy / relative, signature)
-            all_caught = _run(copy, label) and all_caught
+            _remove_guard(copy / relative, signature, injection)
+            all_caught = _run(copy, label, test_file) and all_caught
     return 0 if all_caught else 1
 
 
@@ -41,19 +46,20 @@ def _ignore(source: Path):
     return ignore
 
 
-def _remove_guard(path: Path, signature: str) -> None:
-    # an early return right under the def makes check always allow
+def _remove_guard(path: Path, signature: str, injection: str) -> None:
+    # an early return right under the def makes the guard a no-op
     lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
     matches = [i for i, line in enumerate(lines) if line.rstrip("\r\n") == signature]
     if len(matches) != 1:
         raise RuntimeError(f"expected one '{signature.strip()}' in {path.name}, found {len(matches)}")
-    lines.insert(matches[0] + 1, "        return Decision(True)\n")
+    lines.insert(matches[0] + 1, injection)
     path.write_text("".join(lines), encoding="utf-8")
 
 
-def _run(copy: Path, label: str) -> bool:
+def _run(copy: Path, label: str, test_file: str) -> bool:
     env = {**os.environ, "PYTHONPATH": str(copy)}
-    done = subprocess.run(TEST_COMMAND, cwd=copy, env=env, capture_output=True, text=True)
+    command = [sys.executable, "-m", "pytest", test_file, "-q"]
+    done = subprocess.run(command, cwd=copy, env=env, capture_output=True, text=True)
     failures = [line for line in done.stdout.splitlines() if line.startswith("FAILED ")]
 
     if done.returncode == 1 and failures:

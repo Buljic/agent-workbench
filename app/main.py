@@ -14,13 +14,13 @@ from workbench.guardrails.secrets import redact
 from workbench.guardrails import CommandPolicy, PathPolicy
 from workbench.guardrails.budgets import Budget
 from workbench.guardrails.facade import Guardrails
-from workbench.models import Approval, Run, RunStatus, Task, ToolCall
+from workbench.config import ALLOWED_COMMANDS, check_repo_root
+from workbench.models import Run, RunStatus, Task
 from workbench.tools import OpenIssueTool, ReadFileTool, RunTestsTool, SearchChunksTool, SearchCodeTool, ToolRegistry
 
 from app.schemas import ApprovalDecision, RunIn, RunOut, TaskIn
 
 DEFAULT_DB = "workbench.db"
-ALLOWED_COMMANDS = [["pytest"], ["python", "-m", "pytest"]]
 
 
 def _default_provider(run_in: RunIn) -> Provider:
@@ -34,6 +34,7 @@ def _default_provider(run_in: RunIn) -> Provider:
 def create_app(
     db_path: str | None = None,
     provider_factory: Callable[[RunIn], Provider] | None = None,
+    repo_roots: list[str] | None = None,
 ) -> FastAPI:
     path = os.environ.get("WORKBENCH_DB", DEFAULT_DB) if db_path is None else db_path
     build_provider = provider_factory or _default_provider
@@ -47,25 +48,35 @@ def create_app(
             budget=budget,
             audit=audit,
         )
+        registry = _registry(task)
+        return guardrails, registry, audit, budget
+
+    def _registry(task: Task) -> ToolRegistry:
         registry = ToolRegistry()
         for tool in (
             ReadFileTool(task.repo_path),
             SearchCodeTool(task.repo_path),
+            SearchChunksTool(task.repo_path),
             RunTestsTool(task.repo_path),
             OpenIssueTool(),
         ):
             registry.register(tool)
-        return guardrails, registry, audit, budget
+        return registry
 
 
     app = FastAPI(title="agent-workbench")
+    app.state.db_path = path
 
     # each endpoint opens its own connection: sqlite objects cannot cross threads
     # and sync endpoints run in a threadpool.
 
     @app.post("/tasks", status_code=201, response_model=Task)
     def create_task(body: TaskIn) -> Task:
-        task = Task(**body.model_dump())
+        try:
+            root = check_repo_root(body.repo_path, repo_roots)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        task = Task(**{**body.model_dump(), "repo_path": str(root)})
         with closing(db.connect(path)) as conn:
             db.insert_task(conn, task)
         return task
@@ -90,23 +101,7 @@ def create_app(
                 raise HTTPException(status_code=422, detail=str(exc)) from exc
 
             # the facade is the only path to the tools, so every denial is audited
-            budget = Budget(body.max_steps, body.max_tokens)
-            audit = AuditLog(conn, redact=redact)
-            guardrails = Guardrails(
-                paths=PathPolicy(task.repo_path, ["**"]),
-                commands=CommandPolicy(ALLOWED_COMMANDS),
-                budget=budget,
-                audit=audit,
-            )
-            registry = ToolRegistry()
-            for tool in (
-                ReadFileTool(task.repo_path),
-                SearchCodeTool(task.repo_path),
-                SearchChunksTool(task.repo_path),
-                RunTestsTool(task.repo_path),
-                OpenIssueTool(),
-            ):
-                registry.register(tool)
+            guardrails, registry, audit, budget = _guardrails(conn, task, body.max_steps, body.max_tokens)
 
             run = Run(
                 id=uuid.uuid4().hex,
@@ -114,6 +109,8 @@ def create_app(
                 status=RunStatus.RUNNING,
                 provider=body.provider,
                 started_at=datetime.now(timezone.utc),
+                max_steps=body.max_steps,
+                max_tokens=body.max_tokens,
             )
             db.insert_run(conn, run)
             Executor(conn, provider, registry, guardrails, audit, budget).run(task, run.id)
@@ -156,21 +153,48 @@ def create_app(
             if task is None:
                 raise HTTPException(status_code=404, detail="task not found")
 
-            db.decide_approval(conn, approval_id, body.approved, body.decided_by)
             audit = AuditLog(conn, redact=redact)
-            audit.record(run_id, "approval_decided",
-                         {"approval_id": approval_id, "approved": body.approved,
-                          "decided_by": body.decided_by})
-
             if not body.approved:
+                db.decide_approval(conn, approval_id, False, body.decided_by)
+                audit.record(run_id, "approval_decided",
+                             {"approval_id": approval_id, "approved": False,
+                              "decided_by": body.decided_by})
                 error = f"rejected by {body.decided_by}"
                 db.update_run(conn, run_id, status=RunStatus.FAILED, error=error,
                               finished_at=datetime.now(timezone.utc))
                 audit.record(run_id, "run_finished", {"status": RunStatus.FAILED.value})
                 return RunOut(**db.get_run(conn, run_id).model_dump())
 
-            # approved: run the pending tool once, then let the loop continue from its history
-            guardrails, registry, audit, budget = _guardrails(conn, task, 8, 20000)
+            # the provider must be constructible before the approval is consumed,
+            # otherwise the run would be stuck with no pending approval
+            run_in = RunIn(task_id=task.id, provider=run.provider, script=body.script,
+                           model=body.model, base_url=body.base_url)
+            try:
+                provider = build_provider(run_in)
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+            db.decide_approval(conn, approval_id, True, body.decided_by)
+            audit.record(run_id, "approval_decided",
+                         {"approval_id": approval_id, "approved": True,
+                          "decided_by": body.decided_by})
+
+            max_steps = run.max_steps if run.max_steps else 8
+            max_tokens = run.max_tokens if run.max_tokens else 20000
+            used_steps = run.steps or 0
+            used_tokens = run.tokens or 0
+            guardrails, registry, audit, budget = _guardrails(
+                conn, task, max(1, max_steps - used_steps), max(1, max_tokens - used_tokens)
+            )
+            # the approved call still goes through the facade, so it is audited like any other
+            decision = guardrails.check(run_id, approval.tool, approval.arguments)
+            if not decision.allowed:
+                db.update_run(conn, run_id, status=RunStatus.FAILED,
+                              error=f"approved tool blocked: {decision.reason}",
+                              finished_at=datetime.now(timezone.utc))
+                audit.record(run_id, "run_finished", {"status": RunStatus.FAILED.value})
+                return RunOut(**db.get_run(conn, run_id).model_dump())
+
             try:
                 result = registry.get(approval.tool).run(approval.arguments)
             except Exception as exc:
@@ -191,18 +215,14 @@ def create_app(
             history.append({"role": "assistant",
                             "content": json.dumps({"tool": approval.tool,
                                                    "arguments": approval.arguments})})
-            history.append({"role": "user", "content": f"{approval.tool} -> {result.output}"})
-
-            run_in = RunIn(task_id=task.id, provider=run.provider, script=body.script,
-                           model=body.model, base_url=body.base_url)
-            try:
-                provider = build_provider(run_in)
-            except ValueError as exc:
-                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            observation = f"tool result for {approval.tool}:\n{result.output}"
+            if result.citations:
+                observation += "\ncitations: " + ", ".join(result.citations)
+            history.append({"role": "user", "content": observation})
 
             db.update_run(conn, run_id, status=RunStatus.RUNNING)
             Executor(conn, provider, registry, guardrails, audit, budget).run(
-                task, run_id, history=history
+                task, run_id, history=history, start_step=used_steps, start_tokens=used_tokens
             )
             return RunOut(**db.get_run(conn, run_id).model_dump())
 

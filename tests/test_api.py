@@ -1,9 +1,11 @@
 import json
+from contextlib import closing
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app.main import create_app
+from workbench import db
 
 TASK = {
     "title": "review app",
@@ -30,7 +32,7 @@ def repo(tmp_path):
 
 @pytest.fixture
 def client(tmp_path):
-    return TestClient(create_app(db_path=str(tmp_path / "t.db")))
+    return TestClient(create_app(db_path=str(tmp_path / "t.db"), repo_roots=[str(tmp_path)]))
 
 
 @pytest.fixture
@@ -172,3 +174,85 @@ def test_rejected_approval_fails_the_run(client, repo, task_id):
     assert decided["status"] == "FAILED"
     assert "rejected by imad" in decided["error"]
     assert client.get(f"/runs/{run['id']}/approvals").json()["pending"] is None
+
+
+def test_task_outside_the_allowed_roots_is_rejected(tmp_path):
+    client = TestClient(create_app(db_path=str(tmp_path / "t.db"), repo_roots=[str(tmp_path)]))
+    outside = tmp_path.parent
+    response = client.post("/tasks", json={**TASK, "repo_path": str(outside)})
+    assert response.status_code == 422
+    assert "repo_path must be under" in response.json()["detail"]
+
+
+def test_search_code_cannot_read_env_files(client, repo):
+    (repo / ".env").write_text("API_KEY=supersecret123\n")
+    (repo / "app.py").write_text("API_KEY = 1\n")
+    task = client.post("/tasks", json={**TASK, "repo_path": str(repo)}).json()
+    script = [step(tool="search_code", arguments={"query": "API_KEY"}), step(final="done")]
+    run = post_run(client, task["id"], script).json()
+    audit = json.dumps(client.get(f"/runs/{run['id']}/audit").json()["records"])
+    assert "supersecret123" not in audit
+
+
+def test_search_chunks_redacts_secrets(client, repo):
+    (repo / "conf.py").write_text("KEY = 'sk-abcdefghijklmnop1234'\n")
+    task = client.post("/tasks", json={**TASK, "repo_path": str(repo)}).json()
+    script = [step(tool="search_chunks", arguments={"query": "KEY"}), step(final="done")]
+    run = post_run(client, task["id"], script).json()
+    audit = json.dumps(client.get(f"/runs/{run['id']}/audit").json()["records"])
+    assert "sk-abcdefghijklmnop1234" not in audit
+
+
+def test_approval_resume_keeps_history_budgets_and_step_numbers(client, repo, task_id):
+    (repo / "src" / "second.py").write_text("y = 2\n")
+    script = [step(tool="read_file", arguments={"path": "src/app.py"}),
+              step(tool="open_issue", arguments={"title": "t", "body": "b"})]
+    run = post_run(client, task_id, script).json()
+    assert run["status"] == "WAITING_APPROVAL"
+    after_first = client.get(f"/runs/{run['id']}").json()
+    pending = client.get(f"/runs/{run['id']}/approvals").json()["pending"]
+    body = {"approved": True, "decided_by": "imad",
+            "script": [step(tool="read_file", arguments={"path": "src/second.py"}),
+                       step(final="finished")]}
+    final = client.post(f"/runs/{run['id']}/approvals/{pending['id']}", json=body).json()
+    assert final["status"] == "COMPLETED"
+    # history survives the pause and the counters continue instead of resetting
+    with closing(db.connect(client.app.state.db_path)) as conn:
+        row = db.get_run(conn, run["id"])
+    assert row.history is not None and "read_file" in row.history
+    assert final["steps"] >= after_first["steps"] + 2
+    assert final["tokens"] > after_first["tokens"]
+
+
+def test_search_code_output_excludes_env_files_at_the_tool_level(repo):
+    (repo / ".env").write_text("API_KEY=supersecret123\n")
+    (repo / "src.py").write_text("API_KEY = 1\n")
+    from workbench.tools import SearchCodeTool
+
+    result = SearchCodeTool(repo).run({"query": "API_KEY", "path": "."})
+    assert "supersecret123" not in result.output
+    assert "src.py:1" in result.output
+
+
+def test_search_chunks_output_redacts_at_the_tool_level(repo):
+    (repo / "conf.py").write_text("KEY = 'sk-abcdefghijklmnop1234'\n")
+    from workbench.tools import SearchChunksTool
+
+    result = SearchChunksTool(repo).run({"query": "KEY", "k": 1})
+    assert "sk-abcdefghijklmnop1234" not in result.output
+    assert "[redacted:api_key]" in result.output
+
+
+def test_approval_resume_respects_the_configured_budget(client, repo, task_id):
+    script = [step(tool="read_file", arguments={"path": "src/app.py"}),
+              step(tool="open_issue", arguments={"title": "t", "body": "b"})]
+    run = post_run(client, task_id, script, max_steps=3).json()
+    pending = client.get(f"/runs/{run['id']}/approvals").json()["pending"]
+    body = {"approved": True, "decided_by": "imad",
+            "script": [step(tool="read_file", arguments={"path": "src/app.py"}),
+                       step(tool="read_file", arguments={"path": "src/app.py"}),
+                       step(tool="read_file", arguments={"path": "src/app.py"}),
+                       step(final="never reached")]}
+    final = client.post(f"/runs/{run['id']}/approvals/{pending['id']}", json=body).json()
+    assert final["status"] == "BLOCKED"
+    assert final["steps"] <= 3

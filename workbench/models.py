@@ -69,3 +69,5 @@ class Run(BaseModel):
     error: str | None = None
     # json text of the message history, kept so an approval can resume the loop
     history: str | None = None
+    max_steps: int | None = None
+    max_tokens: int | None = None

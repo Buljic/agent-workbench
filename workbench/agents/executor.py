@@ -49,8 +49,15 @@ class Executor:
         self.budget = budget
         self.max_tokens_per_step = max_tokens_per_step
 
-    def run(self, task: Task, run_id: str, history: list[dict] | None = None) -> RunOutcome:
-        outcome = self._run_loop(task, run_id, history or [])
+    def run(
+        self,
+        task: Task,
+        run_id: str,
+        history: list[dict] | None = None,
+        start_step: int = 0,
+        start_tokens: int = 0,
+    ) -> RunOutcome:
+        outcome = self._run_loop(task, run_id, history or [], start_step, start_tokens)
         self._finalize(run_id, outcome)
         return outcome
 
@@ -69,11 +76,18 @@ class Executor:
         db.update_run(self.conn, run_id, **fields)
         self.audit.record(run_id, "run_finished", {"status": outcome.status.value})
 
-    def _run_loop(self, task: Task, run_id: str, history: list[dict]) -> RunOutcome:
+    def _run_loop(
+        self,
+        task: Task,
+        run_id: str,
+        history: list[dict],
+        start_step: int,
+        start_tokens: int,
+    ) -> RunOutcome:
         self.audit.record(run_id, "run_started", {"task_id": task.id})
         self._save_history(run_id, history)
-        steps = 0
-        tokens = 0
+        steps = start_step
+        tokens = start_tokens
 
         while self.budget.remaining_steps > 0:
             self.guardrails.spend_step(run_id)
@@ -133,6 +147,8 @@ class Executor:
                     requested_at=datetime.now(timezone.utc),
                 )
                 db.insert_approval(self.conn, approval)
+                history.append({"role": "assistant", "content": raw})
+                self._save_history(run_id, history)
                 self.audit.record(run_id, "approval_requested", {"approval_id": approval.id, "tool": tool})
                 db.update_run(self.conn, run_id, status=RunStatus.WAITING_APPROVAL)
                 return RunOutcome(
@@ -144,6 +160,7 @@ class Executor:
             except KeyError:
                 return RunOutcome(RunStatus.FAILED, None, steps, tokens, error=f"unknown tool: {tool}")
 
+            citations: list[str] = []
             try:
                 result = impl.run(arguments)
             except Exception as exc:
@@ -152,10 +169,14 @@ class Executor:
                 self._finish_tool_call(run_id, steps, output, [])
             else:
                 output = result.output
-                self._finish_tool_call(run_id, steps, output, result.citations)
+                citations = list(result.citations)
+                self._finish_tool_call(run_id, steps, output, citations)
 
             history.append({"role": "assistant", "content": raw})
-            history.append({"role": "user", "content": f"{tool} -> {output}"})
+            observation = f"tool result for {tool}:\n{output}"
+            if citations:
+                observation += "\ncitations: " + ", ".join(citations)
+            history.append({"role": "user", "content": observation})
             self._save_history(run_id, history)
 
         self.audit.record(run_id, "budget_exceeded", {"kind": "steps"})

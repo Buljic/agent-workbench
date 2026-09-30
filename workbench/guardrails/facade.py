@@ -16,6 +16,22 @@ class ToolDecision:
     needs_approval: bool = False
 
 
+def _escapes_repository(arg: str) -> bool:
+    if arg.startswith("@"):
+        # pytest reads the file named after @, including deny-listed files
+        return True
+    if arg.startswith("-") and "=" in arg and _path_escapes(arg.split("=", 1)[1]):
+        return True
+    if len(arg) > 2 and arg.startswith("-") and not arg.startswith("--") and _path_escapes(arg[2:]):
+        # a short flag glued to a path, for example -c/etc/passwd
+        return arg[2] in "/~"
+    return _path_escapes(arg)
+
+
+def _path_escapes(value: str) -> bool:
+    return value.startswith("/") or value.startswith("~") or ".." in value.split("/")
+
+
 class Guardrails:
     def __init__(
         self,
@@ -65,6 +81,11 @@ class Guardrails:
         command = self.commands.check(argv)
         if not command.allowed:
             return ToolDecision(False, command.reason)
+        # arguments must not point at absolute paths, walk upwards, or pull in a file
+        # through a pytest argfile or an attached flag value; argv[0] is the program
+        for arg in argv[1:]:
+            if _escapes_repository(arg):
+                return ToolDecision(False, f"argument escapes the repository: {arg}")
         cwd = self._check_path(arguments.get("cwd", "."))
         if not cwd.allowed:
             return cwd

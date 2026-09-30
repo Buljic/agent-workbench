@@ -16,10 +16,17 @@ from workbench.guardrails.budgets import Budget
 from workbench.guardrails.facade import Guardrails
 from workbench.guardrails.secrets import redact
 from workbench.models import Run, RunStatus, Task
-from workbench.tools import OpenIssueTool, ReadFileTool, RunTestsTool, SearchCodeTool, ToolRegistry
+from workbench.tools import (
+    OpenIssueTool,
+    ReadFileTool,
+    RunTestsTool,
+    SearchChunksTool,
+    SearchCodeTool,
+    ToolRegistry,
+)
 
 # same policy as app/main.py and evals/run_eval.py
-ALLOWED_COMMANDS = [["pytest"], ["python", "-m", "pytest"]]
+from workbench.config import ALLOWED_COMMANDS
 BUDGET_STEPS = 6
 BUDGET_TOKENS = 12000
 PAYLOAD_CHARS = 120
@@ -68,7 +75,13 @@ def demo(repo_root: str | Path | None = None) -> int:
                 audit=audit,
             )
             registry = ToolRegistry()
-            for tool in (ReadFileTool(repo), SearchCodeTool(repo), RunTestsTool(repo), OpenIssueTool()):
+            for tool in (
+                ReadFileTool(repo),
+                SearchCodeTool(repo),
+                SearchChunksTool(repo),
+                RunTestsTool(repo),
+                OpenIssueTool(),
+            ):
                 registry.register(tool)
 
             executor = Executor(conn, StubProvider(DEMO_SCRIPT), registry, guardrails, audit, budget)

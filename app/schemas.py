@@ -23,12 +23,6 @@ class RunIn(BaseModel):
     model: str | None = None
     base_url: str | None = None
 
-
-class ApprovalIn(BaseModel):
-    approved: bool
-    decided_by: str = Field(min_length=1, max_length=80)
-
-
 class RunOut(BaseModel):
     id: str
     task_id: str

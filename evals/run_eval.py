@@ -15,7 +15,14 @@ from workbench.guardrails.budgets import Budget
 from workbench.guardrails.facade import Guardrails
 from workbench.guardrails.secrets import redact
 from workbench.models import Run, RunStatus, Task
-from workbench.tools import OpenIssueTool, ReadFileTool, RunTestsTool, SearchCodeTool, ToolRegistry
+from workbench.tools import (
+    OpenIssueTool,
+    ReadFileTool,
+    RunTestsTool,
+    SearchChunksTool,
+    SearchCodeTool,
+    ToolRegistry,
+)
 
 from evals.tasks import GOLDEN_TASKS, GoldenTask
 
@@ -23,7 +30,7 @@ FIXTURE = Path(__file__).resolve().parent / "fixture_repo"
 DEFAULT_OUT = Path(__file__).resolve().parent / "out" / "results.json"
 
 # same policy as app/main.py
-ALLOWED_COMMANDS = [["pytest"], ["python", "-m", "pytest"]]
+from workbench.config import ALLOWED_COMMANDS
 BUDGET_STEPS = 8
 BUDGET_TOKENS = 20000
 
@@ -36,6 +43,7 @@ def run_suite(
     base_url: str | None = None,
     model: str | None = None,
     workdir: Path | None = None,
+    tasks: list[GoldenTask] | None = None,
 ) -> list[dict]:
     if provider_name not in ("stub", "llama_cpp"):
         raise ValueError(f"unknown provider: {provider_name}")
@@ -43,7 +51,7 @@ def run_suite(
         raise ValueError("llama_cpp needs base_url and model")
     return [
         _run_task(golden, provider_name, base_url, model, workdir)
-        for golden in GOLDEN_TASKS
+        for golden in (tasks if tasks is not None else GOLDEN_TASKS)
     ]
 
 
@@ -85,7 +93,13 @@ def _run_task(
                 audit=audit,
             )
             registry = ToolRegistry()
-            for tool in (ReadFileTool(repo), SearchCodeTool(repo), RunTestsTool(repo), OpenIssueTool()):
+            for tool in (
+                ReadFileTool(repo),
+                SearchCodeTool(repo),
+                SearchChunksTool(repo),
+                RunTestsTool(repo),
+                OpenIssueTool(),
+            ):
                 registry.register(tool)
 
             executor = Executor(conn, _make_provider(provider_name, golden, base_url, model),
@@ -108,8 +122,13 @@ def _run_task(
         "steps": outcome.steps,
         "tokens": outcome.tokens,
         "seconds": round(seconds, 3),
+        "provider": provider_name,
+        "model": model,
+        "base_url": base_url,
         # failed runs have no answer, so show the error instead
         "result": (outcome.result or outcome.error or "")[:RESULT_CHARS],
+        "answer": outcome.result or "",
+        "error": outcome.error or "",
     }
 
 

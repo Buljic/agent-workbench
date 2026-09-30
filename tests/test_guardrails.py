@@ -141,3 +141,45 @@ def test_pem_block_body_is_redacted():
     out = redact(text)
     assert "MIIEowIBAAKCAQEA" not in out
     assert "[redacted:pem_block]" in out
+
+
+def test_run_tests_rejects_argfiles_and_attached_paths():
+    from workbench.guardrails.budgets import Budget
+    from workbench.guardrails.commands import CommandPolicy
+    from workbench.guardrails.facade import Guardrails
+    from workbench.guardrails.paths import PathPolicy
+    from workbench.audit import AuditLog
+    import sqlite3
+
+    import tempfile
+
+    root = tempfile.mkdtemp()
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    from workbench import db as _db
+
+    _db.init_db(conn)
+    task = _db.Task if False else None
+    from workbench.models import Run, RunStatus
+
+    _db.insert_run(
+        conn,
+        Run(id="run-1", task_id="t", status=RunStatus.RUNNING, provider="stub",
+            started_at=__import__("datetime").datetime.now(__import__("datetime").timezone.utc)),
+    )
+    facade = Guardrails(
+        paths=PathPolicy(root, ["**"]),
+        commands=CommandPolicy([["pytest"]]),
+        budget=Budget(5, 1000),
+        audit=AuditLog(conn),
+    )
+    for argv in (
+        ["pytest", "@/etc/passwd"],
+        ["pytest", "@.env"],
+        ["pytest", "-c/etc/passwd"],
+        ["pytest", "--rootdir=/etc"],
+    ):
+        decision = facade.check("run-1", "run_tests", {"argv": argv})
+        assert not decision.allowed
+    decision = facade.check("run-1", "run_tests", {"argv": ["pytest", "tests/test_server.py", "-q"]})
+    assert decision.allowed

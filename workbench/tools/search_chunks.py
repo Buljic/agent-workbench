@@ -1,3 +1,4 @@
+from workbench.guardrails.secrets import redact
 from workbench.retrieval import RepoIndex
 from workbench.retrieval.search import ChunkSearch
 from workbench.tools.registry import ToolResult
@@ -47,6 +48,6 @@ class SearchChunksTool:
         lines = []
         for hit in hits:
             lines.append(f"{hit.citation} | {hit.score:.3f}")
-            for line in hit.text.splitlines()[:20]:
+            for line in redact(hit.text).splitlines()[:20]:
                 lines.append(f"    {line}")
         return ToolResult(tool=self.name, output="\n".join(lines), citations=citations)

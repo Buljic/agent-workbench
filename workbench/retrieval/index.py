@@ -104,6 +104,9 @@ class RepoIndex:
         return [Chunk(*row) for row in rows]
 
     def _candidates(self) -> Iterator[Path]:
+        from workbench.guardrails.paths import PathPolicy
+
+        policy = PathPolicy(self.root, ["**"])
         for dirpath, dirnames, filenames in os.walk(self.root):
             dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS)
             for name in sorted(filenames):
@@ -112,6 +115,10 @@ class RepoIndex:
                     continue
                 # a symlink may point outside root, so confine the real path
                 if not path.resolve().is_relative_to(self.root):
+                    continue
+                # the deny list applies here too, so index runs never read keys or env files
+                relative = path.relative_to(self.root).as_posix()
+                if not policy.check(relative).allowed:
                     continue
                 yield path
 
