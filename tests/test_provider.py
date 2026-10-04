@@ -46,3 +46,13 @@ def test_make_provider_llama_cpp_constructed_without_network():
 def test_make_provider_llama_cpp_requires_model():
     with pytest.raises(ValueError, match="model"):
         make_provider("llama_cpp", base_url="http://127.0.0.1:9")
+
+
+def test_openai_alias_builds_the_compatible_client():
+    provider = make_provider("openai", base_url="http://127.0.0.1:9", model="m")
+    assert isinstance(provider, LlamaCppProvider)
+
+
+def test_openai_alias_requires_endpoint_and_model():
+    with pytest.raises(ValueError):
+        make_provider("openai", model="m")

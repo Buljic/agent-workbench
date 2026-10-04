@@ -42,14 +42,15 @@ failure if any mutation slips through. `make demo` runs one review and prints it
 
 With the stub provider the score is 10 of 10 by construction, since it replays each golden script.
 That checks the wiring end to end and says nothing about model quality. For model quality I ran the
-same ten tasks against two real models on CPU on 2026-09-30, with a llama.cpp build that has no GPU
-support, niced on eight cores while the GPU was busy with other work:
+same ten tasks against real models, first on CPU on 2026-09-30 with a llama.cpp build that has no
+GPU support (niced on eight cores while the GPU was busy), then on the GPU on 2026-10-04:
 
 | model | provider | passed | steps per task | notes |
 |---|---|---|---|---|
 | stub (scripted) | stub | 10 of 10 | 2-3 | pipeline check, not a measurement |
 | llama3.2:1b | llama_cpp | 0 of 10 | 1 everywhere | answered without calling a single tool |
 | llama3.1:8b-instruct-q4_K_M | llama_cpp | 2 of 10 | 4-8 | called tools, six runs hit the step budget |
+| Qwen2.5-7B-Instruct-AWQ on RTX 3090 (vLLM) | openai | 1 of 10 | 2-8 | fast, but kept trying to file issues and hit plan errors |
 
 The 8B run, from `evals/results/2026-09-30-llama31-8b-cpu.json`:
 
@@ -66,10 +67,34 @@ The 8B run, from `evals/results/2026-09-30-llama31-8b-cpu.json`:
 | docs-after-validation | docs | BLOCKED | no | 8 | 3662 | 133.99 |
 | docs-sqlite-writer | docs | COMPLETED | yes | 7 | 4311 | 45.95 |
 
-Both runs are committed whole: each JSON row carries the provider, model, base URL, status, steps,
+All runs are committed whole: each JSON row carries the provider, model, base URL, status, steps,
 tokens, seconds, the full answer and any error, so the sentences below can be checked against it.
 A rerun at temperature zero should land close but not bit-identical, since sampling and timing both
 move a little.
+
+The GPU follow-up ran on 2026-10-04: Qwen2.5-7B-Instruct-AWQ on an RTX 3090 through vLLM, same ten
+tasks, same eight-step budget, same rubric, recorded as
+`evals/results/2026-10-04-qwen25-7b-awq-gpu.json`.
+
+| task | type | status | passed | steps | tokens | seconds |
+|---|---|---|---|---|---|---|
+| review-race-results | review | FAILED | no | 2 | 687 | 0.72 |
+| review-fetch-timeout | review | WAITING_APPROVAL | no | 6 | 6025 | 2.17 |
+| review-page-offset | review | WAITING_APPROVAL | no | 8 | 4569 | 2.24 |
+| triage-find-encoding-test | test_triage | FAILED | no | 2 | 715 | 1.01 |
+| triage-run-single-file | test_triage | COMPLETED | no | 3 | 1145 | 0.82 |
+| triage-propose-fix | test_triage | WAITING_APPROVAL | no | 2 | 745 | 1.24 |
+| docs-retry-policy | docs | WAITING_APPROVAL | no | 3 | 1494 | 1.44 |
+| docs-api-key-source | docs | WAITING_APPROVAL | no | 3 | 1186 | 1.03 |
+| docs-after-validation | docs | COMPLETED | yes | 6 | 5240 | 1.82 |
+| docs-sqlite-writer | docs | FAILED | no | 8 | 5670 | 8.01 |
+
+It was 20 to 100 times faster per task than the CPU runs and scored 1 of 10. That answers the open
+question from the CPU section: the constraint is the model holding the tool protocol, not the
+hardware doing the work. Five of the ten runs stopped at the approval gate because the model kept
+calling `open_issue`, which the prompt tells it not to do unless the task asks; three produced no
+parseable action; one documentation task came back correct. A better-instructed model is the next
+thing to vary, not the step budget.
 
 What the numbers say. The 1B model never called a tool in any task; it answered from memory in one
 step, which is why it scores zero, and three of its answers were not even parseable as an

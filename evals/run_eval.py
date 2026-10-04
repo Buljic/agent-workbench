@@ -45,10 +45,10 @@ def run_suite(
     workdir: Path | None = None,
     tasks: list[GoldenTask] | None = None,
 ) -> list[dict]:
-    if provider_name not in ("stub", "llama_cpp"):
+    if provider_name not in ("stub", "llama_cpp", "openai"):
         raise ValueError(f"unknown provider: {provider_name}")
-    if provider_name == "llama_cpp" and not (base_url and model):
-        raise ValueError("llama_cpp needs base_url and model")
+    if provider_name in ("llama_cpp", "openai") and not (base_url and model):
+        raise ValueError(f"{provider_name} needs base_url and model")
     return [
         _run_task(golden, provider_name, base_url, model, workdir)
         for golden in (tasks if tasks is not None else GOLDEN_TASKS)
@@ -159,7 +159,7 @@ def render_table(rows: list[dict]) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="run the golden tasks against the fixture repo")
-    parser.add_argument("--provider", choices=["stub", "llama_cpp"], default="stub")
+    parser.add_argument("--provider", choices=["stub", "llama_cpp", "openai"], default="stub")
     parser.add_argument("--base-url")
     parser.add_argument("--model")
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)

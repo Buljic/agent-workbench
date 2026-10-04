@@ -60,9 +60,11 @@ def make_provider(name: str, **kwargs) -> Provider:
         if "script" not in kwargs:
             raise ValueError("stub provider requires script")
         return StubProvider(kwargs["script"])
-    if name == "llama_cpp":
+    if name in ("llama_cpp", "openai"):
+        # both speak the OpenAI chat completions protocol; the name only records
+        # which server ran the model
         missing = [key for key in ("base_url", "model") if key not in kwargs]
         if missing:
-            raise ValueError(f"llama_cpp provider requires {', '.join(missing)}")
+            raise ValueError(f"{name} provider requires {', '.join(missing)}")
         return LlamaCppProvider(**kwargs)
     raise ValueError(f"unknown provider: {name}")
