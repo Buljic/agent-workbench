@@ -12,7 +12,22 @@ Read the files your answer depends on, and cite them as path:line.
 Once the tool output gives you enough evidence, answer with {"final": ...}.
 Do not call open_issue unless the task asks to file an issue.
 Never invent file contents, command output or test results.
-Use only the tools listed here."""
+Use only the tools listed here.
+
+Example for the task "find where the retry limit is set":
+{"tool": "search_code", "arguments": {"query": "retry"}}
+after the tool result:
+{"final": "The retry limit is set in config/settings.toml:2 as max_attempts."}"""
+
+ACTION_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "tool": {"type": "string"},
+        "arguments": {"type": "object"},
+        "final": {"type": "string"},
+    },
+    "anyOf": [{"required": ["tool", "arguments"]}, {"required": ["final"]}],
+}
 
 FENCE = re.compile(r"```[A-Za-z0-9_-]*")
 

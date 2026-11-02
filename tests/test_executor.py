@@ -189,3 +189,11 @@ def test_terminal_state_is_persisted_on_the_run_row(conn, repo, task):
     assert row.finished_at is not None
     assert row.result == "done"
     assert events(conn)[-1] == "run_finished"
+
+
+def test_executor_sends_the_action_schema_to_guided_providers(conn, repo, task):
+    script = [step(tool="read_file", arguments={"path": "src/app.py"}), step(final="done")]
+    executor, provider = build(conn, repo, script)
+    executor.run(task, RUN_ID)
+    assert provider.calls[0]["json_schema"] is not None
+    assert "tool" in str(provider.calls[0]["json_schema"])

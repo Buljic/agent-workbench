@@ -51,6 +51,8 @@ GPU support (niced on eight cores while the GPU was busy), then on the GPU on 20
 | llama3.2:1b | llama_cpp | 0 of 10 | 1 everywhere | answered without calling a single tool |
 | llama3.1:8b-instruct-q4_K_M | llama_cpp | 2 of 10 | 4-8 | called tools, six runs hit the step budget |
 | Qwen2.5-7B-Instruct-AWQ on RTX 3090 (vLLM) | openai | 1 of 10 | 2-8 | fast, but kept trying to file issues and hit plan errors |
+| same model, guided decoding + prompt v2 | openai | 3 of 10 | 2-8 | no parse failures, no issue loops, five runs finished |
+| same, with a 16-step budget | openai | 4 of 10 | 2-16 | seven of ten runs finished |
 
 The 8B run, from `evals/results/2026-09-30-llama31-8b-cpu.json`:
 
@@ -89,12 +91,32 @@ tasks, same eight-step budget, same rubric, recorded as
 | docs-after-validation | docs | COMPLETED | yes | 6 | 5240 | 1.82 |
 | docs-sqlite-writer | docs | FAILED | no | 8 | 5670 | 8.01 |
 
-It was 20 to 100 times faster per task than the CPU runs and scored 1 of 10. That answers the open
-question from the CPU section: the constraint is the model holding the tool protocol, not the
-hardware doing the work. Five of the ten runs stopped at the approval gate because the model kept
-calling `open_issue`, which the prompt tells it not to do unless the task asks; three produced no
-parseable action; one documentation task came back correct. A better-instructed model is the next
-thing to vary, not the step budget.
+It was 20 to 100 times faster per task than the CPU runs and scored 1 of 10. The failures
+were protocol adherence, not speed, so the follow-up on 2026-11-02 changed the platform, not
+the rubric: guided JSON decoding of actions (vLLM constrains the reply to the action schema,
+so unparseable output is impossible), a worked example in the system prompt, and one run with
+a 16-step budget. Same ten tasks, same keywords, same model.
+
+| setup | completed | passed |
+|---|---|---|
+| plain, 8-step budget (2026-10-04) | 2 of 10 | 1 of 10 |
+| guided decoding + prompt v2, 8-step budget | 5 of 10 | 3 of 10 |
+| guided decoding + prompt v2, 16-step budget | 7 of 10 | 4 of 10 |
+
+The 16-step run, from `evals/results/2026-11-02-qwen25-7b-awq-guided-v2-budget16.json`:
+
+| task | type | status | passed | steps | tokens | seconds |
+|---|---|---|---|---|---|---|
+| review-race-results | review | BLOCKED | no | 15 | 18991 | 3.23 |
+| review-fetch-timeout | review | BLOCKED | no | 16 | 11271 | 6.73 |
+| review-page-offset | review | COMPLETED | no | 9 | 9774 | 2.44 |
+| triage-find-encoding-test | test_triage | COMPLETED | yes | 9 | 5214 | 1.72 |
+| triage-run-single-file | test_triage | COMPLETED | no | 2 | 857 | 0.69 |
+| triage-propose-fix | test_triage | BLOCKED | no | 16 | 10436 | 2.96 |
+| docs-retry-policy | docs | COMPLETED | no | 2 | 923 | 0.64 |
+| docs-api-key-source | docs | COMPLETED | yes | 4 | 2245 | 0.76 |
+| docs-after-validation | docs | COMPLETED | yes | 3 | 1435 | 0.81 |
+| docs-sqlite-writer | docs | COMPLETED | yes | 4 | 3652 | 1.02 |
 
 What the numbers say. The 1B model never called a tool in any task; it answered from memory in one
 step, which is why it scores zero, and three of its answers were not even parseable as an

@@ -11,7 +11,8 @@ def test_stub_returns_script_in_order_and_records_calls():
     assert provider.complete(messages) == "second"
 
     assert len(provider.calls) == 2
-    assert provider.calls[0] == {"messages": messages, "max_tokens": 50}
+    assert provider.calls[0]["messages"] == messages
+    assert provider.calls[0]["max_tokens"] == 50
     assert provider.calls[1]["max_tokens"] == 400
 
 
@@ -56,3 +57,9 @@ def test_openai_alias_builds_the_compatible_client():
 def test_openai_alias_requires_endpoint_and_model():
     with pytest.raises(ValueError):
         make_provider("openai", model="m")
+
+
+def test_stub_records_the_guided_schema_argument():
+    provider = StubProvider(["{\"final\": \"ok\"}"])
+    provider.complete([{"role": "user", "content": "hi"}], json_schema={"type": "object"})
+    assert provider.calls[0]["json_schema"] == {"type": "object"}

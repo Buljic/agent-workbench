@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from workbench import db
-from workbench.agents.planner import PlanError, build_messages, parse_action
+from workbench.agents.planner import ACTION_SCHEMA, PlanError, build_messages, parse_action
 from workbench.agents.provider import Provider, ProviderError
 from workbench.audit import AuditLog
 from workbench.guardrails.budgets import Budget, BudgetExceeded
@@ -95,7 +95,10 @@ class Executor:
 
             messages = build_messages(task, history, self.registry.describe())
             try:
-                raw = self.provider.complete(messages, max_tokens=self.max_tokens_per_step)
+                schema = ACTION_SCHEMA if getattr(self.provider, "supports_guided_json", False) else None
+                raw = self.provider.complete(
+                    messages, max_tokens=self.max_tokens_per_step, json_schema=schema
+                )
             except ProviderError as exc:
                 self.audit.record(run_id, "provider_error", {"error": str(exc)})
                 return RunOutcome(RunStatus.FAILED, None, steps, tokens, error=f"provider error: {exc}")

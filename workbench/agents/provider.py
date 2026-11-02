@@ -8,34 +8,49 @@ class ProviderError(Exception):
 
 
 class Provider(Protocol):
-    def complete(self, messages: list[dict], max_tokens: int = 400) -> str: ...
+    def complete(
+        self, messages: list[dict], max_tokens: int = 400, json_schema: dict | None = None
+    ) -> str: ...
 
 
 class StubProvider:
+    # the stub plays the role of a compliant server, so it accepts the schema
+    supports_guided_json = True
+
     def __init__(self, script: list[str]) -> None:
         self._script = list(script)
         self.calls: list[dict] = []
 
-    def complete(self, messages: list[dict], max_tokens: int = 400) -> str:
-        self.calls.append({"messages": messages, "max_tokens": max_tokens})
+    def complete(
+        self, messages: list[dict], max_tokens: int = 400, json_schema: dict | None = None
+    ) -> str:
+        self.calls.append({"messages": messages, "max_tokens": max_tokens, "json_schema": json_schema})
         if not self._script:
             raise ProviderError("script exhausted")
         return self._script.pop(0)
 
 
 class LlamaCppProvider:
-    def __init__(self, base_url: str, model: str, timeout_s: float = 120.0) -> None:
+    def __init__(self, base_url: str, model: str, timeout_s: float = 120.0,
+                 guided: bool = False) -> None:
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.timeout_s = timeout_s
+        # only send guided_json when the caller opted in; older committed runs
+        # used unguided requests, so this stays off by default
+        self.supports_guided_json = guided
 
-    def complete(self, messages: list[dict], max_tokens: int = 400) -> str:
+    def complete(
+        self, messages: list[dict], max_tokens: int = 400, json_schema: dict | None = None
+    ) -> str:
         payload = {
             "model": self.model,
             "messages": messages,
             "max_tokens": max_tokens,
             "temperature": 0,
         }
+        if json_schema is not None and self.supports_guided_json:
+            payload["guided_json"] = json_schema
         # the only network call in the agent package
         try:
             response = httpx.post(

@@ -44,13 +44,16 @@ def run_suite(
     model: str | None = None,
     workdir: Path | None = None,
     tasks: list[GoldenTask] | None = None,
+    max_steps: int | None = None,
+    max_tokens: int | None = None,
+    guided: bool = False,
 ) -> list[dict]:
     if provider_name not in ("stub", "llama_cpp", "openai"):
         raise ValueError(f"unknown provider: {provider_name}")
     if provider_name in ("llama_cpp", "openai") and not (base_url and model):
         raise ValueError(f"{provider_name} needs base_url and model")
     return [
-        _run_task(golden, provider_name, base_url, model, workdir)
+        _run_task(golden, provider_name, base_url, model, workdir, max_steps, max_tokens, guided)
         for golden in (tasks if tasks is not None else GOLDEN_TASKS)
     ]
 
@@ -61,6 +64,9 @@ def _run_task(
     base_url: str | None,
     model: str | None,
     workdir: Path | None,
+    max_steps: int | None = None,
+    max_tokens: int | None = None,
+    guided: bool = False,
 ) -> dict:
     # each task gets its own copy of the fixture and its own database
     with tempfile.TemporaryDirectory(dir=workdir) as tmp:
@@ -84,7 +90,7 @@ def _run_task(
             )
             db.insert_run(conn, run)
 
-            budget = Budget(BUDGET_STEPS, BUDGET_TOKENS)
+            budget = Budget(max_steps or BUDGET_STEPS, max_tokens or BUDGET_TOKENS)
             audit = AuditLog(conn, redact=redact)
             guardrails = Guardrails(
                 paths=PathPolicy(repo, ["**"]),
@@ -102,7 +108,7 @@ def _run_task(
             ):
                 registry.register(tool)
 
-            executor = Executor(conn, _make_provider(provider_name, golden, base_url, model),
+            executor = Executor(conn, _make_provider(provider_name, golden, base_url, model, guided),
                                 registry, guardrails, audit, budget)
             started = time.perf_counter()
             outcome = executor.run(task, run.id)
@@ -125,6 +131,7 @@ def _run_task(
         "provider": provider_name,
         "model": model,
         "base_url": base_url,
+        "guided": guided,
         # failed runs have no answer, so show the error instead
         "result": (outcome.result or outcome.error or "")[:RESULT_CHARS],
         "answer": outcome.result or "",
@@ -132,10 +139,11 @@ def _run_task(
     }
 
 
-def _make_provider(name: str, golden: GoldenTask, base_url: str | None, model: str | None) -> Provider:
+def _make_provider(name: str, golden: GoldenTask, base_url: str | None, model: str | None,
+                   guided: bool = False) -> Provider:
     if name == "stub":
         return StubProvider(golden.stub_script)
-    return LlamaCppProvider(base_url, model)
+    return LlamaCppProvider(base_url, model, guided=guided)
 
 
 def render_table(rows: list[dict]) -> str:
@@ -163,10 +171,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--base-url")
     parser.add_argument("--model")
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
+    parser.add_argument("--max-steps", type=int, default=None)
+    parser.add_argument("--max-tokens", type=int, default=None)
+    parser.add_argument("--guided", action="store_true",
+                        help="ask the server for guided JSON decoding of actions")
     args = parser.parse_args(argv)
 
     try:
-        rows = run_suite(args.provider, base_url=args.base_url, model=args.model)
+        rows = run_suite(args.provider, base_url=args.base_url, model=args.model,
+                         max_steps=args.max_steps, max_tokens=args.max_tokens,
+                         guided=args.guided)
     except ValueError as exc:
         parser.error(str(exc))
 
